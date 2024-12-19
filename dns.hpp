@@ -209,7 +209,7 @@ static std::tuple<size_t, std::string> LablizeName(const char *name) {
 	// I think according to the rfc1035, the domain name should be fully qualified
 	//
 	r.resize(nameLen + (name[nameLen - 1] == '.' ? 1 : 2));
-	memset(&r[0], 0, r.size());
+	// memset(&r[0], 0, r.size());
 	memcpy(&r[1], name, r.size() - 1);
 
 	//
@@ -416,7 +416,7 @@ public:
 	}
 
 private:
-	std::vector<std::string_view> CollectPartsFromLabelizedString(const std::string &labelizedS) {
+	std::vector<std::string_view> CollectPartsFromLabelizedString(std::string_view labelizedS) {
 		std::vector<std::string_view> result;
 		auto ptr = &labelizedS[0];
 		while (ptr < &labelizedS[0] + labelizedS.size() - 1) {
