@@ -6,6 +6,7 @@
 #include <cstddef>
 #include <cstring>
 #include <list>
+#include <optional>
 #include <string>
 #include <tuple>
 #include <variant>
@@ -582,11 +583,11 @@ public:
 			return { 0, {} };
 		}
 		// resolve data
-		auto [ok, data] = BuildDnsData(r.type, head_ + offset + rsize, dataSize);
-		if (!ok) {
+		auto result = BuildDnsData(r.type, head_ + offset + rsize, dataSize);
+		if (!result) {
 			return { 0, {} };
 		}
-		r.value = std::move(data);
+		r.value = std::move(result.value());
 		rsize += dataSize;
 
 		// done
@@ -594,7 +595,7 @@ public:
 	}
 
 private:
-	std::tuple<bool, DnsRecordData> BuildDnsData(uint16_t type, const uint8_t *dataPtr, uint16_t dataLength) {
+	std::optional<DnsRecordData> BuildDnsData(uint16_t type, const uint8_t *dataPtr, uint16_t dataLength) {
 		switch (type) {
 			case RecordType::A: {
 				//
@@ -603,7 +604,7 @@ private:
 				if (dataLength != sizeof(AData)) {
 					break;
 				}
-				return { true, *(AData *)dataPtr };
+				return *(AData *)dataPtr;
 			} break;
 			case RecordType::AAAA: {
 				//
@@ -614,7 +615,7 @@ private:
 					break;
 				}
 				memcpy(&data[0], dataPtr, data.size());
-				return { true, std::move(data) };
+				return std::move(data);
 			} break;
 			case RecordType::SOA: {
 				//
@@ -629,19 +630,19 @@ private:
 				// +0x14 Minimum TTL
 				//
 				if (dataLength < 0x18) {
-					return { 0, {} };
+					return std::nullopt;
 				}
 				size_t offset = 0;
 
 				auto [primaySvrLen, primarySvr] = ReadDomainName(head_, dataPtr + offset, tail_);
 				if (!primaySvrLen || dataLength < 0x16 + primaySvrLen) {
-					return { 0, {} };
+					return std::nullopt;
 				}
 				offset += primaySvrLen;
 
 				auto [mailboxLen, mailbox] = ReadDomainName(head_, dataPtr + offset, tail_);
 				if (!mailboxLen || dataLength != 0x14 + primaySvrLen + mailboxLen) {
-					return { 0, {} };
+					return std::nullopt;
 				}
 				offset += mailboxLen;
 
@@ -654,7 +655,7 @@ private:
 				r.retry = ntohl(*(uint16_t *)(dataPtr + offset + sizeof(uint32_t) * 2));
 				r.expire = ntohl(*(uint16_t *)(dataPtr + offset + sizeof(uint32_t) * 3));
 				r.defaultTtl = ntohl(*(uint16_t *)(dataPtr + offset + sizeof(uint32_t) * 4));
-				return { true, std::move(r) };
+				return std::move(r);
 			} break;
 			case RecordType::MX: {
 				//
@@ -663,15 +664,15 @@ private:
 				//
 				MXData data;
 				if (dataLength < sizeof(uint16_t) * 2) {
-					return { false, {} };
+					return std::nullopt;
 				}
 				data.preference = ntohs(*(uint16_t *)dataPtr);
 				auto [nameSize, name] = ReadDomainName(head_, dataPtr + sizeof(uint16_t), tail_);
 				if (nameSize + sizeof(uint16_t) != dataLength) {
-					return { false, {} };
+					return std::nullopt;
 				}
 				data.exchange = std::move(name);
-				return { true, std::move(data) };
+				return std::move(data);
 			} break;
 			case RecordType::NS:
 			case RecordType::CNAME:
@@ -681,9 +682,9 @@ private:
 				//
 				auto [nameSize, name] = ReadDomainName(head_, dataPtr, tail_);
 				if (nameSize != dataLength) {
-					return { false, {} };
+					return std::nullopt;
 				}
-				return { true, std::move(name) };
+				return std::move(name);
 			} break;
 			case RecordType::TXT:
 			case RecordType::SPF: {
@@ -692,12 +693,12 @@ private:
 				// +0x01 Text (VARIANT length)
 				//
 				if (dataLength <= 1 || dataLength != *(uint8_t *)dataPtr + 1) {
-					return { false, {} };
+					return std::nullopt;
 				}
 				TXTData data;
 				data.size = *(uint8_t *)dataPtr;
 				data.txt = std::string((char *)dataPtr + 1, dataLength - 1);
-				return { true, std::move(data) };
+				return std::move(data);
 			} break;
 			default: {
 				// Unsupported record type (for now)
@@ -709,7 +710,7 @@ private:
 					}
 					memcpy(&payload[0], dataPtr, dataLength);
 				}
-				return { true, std::move(payload) };
+				return std::move(payload);
 			} break;
 		}
 		return {};
@@ -941,7 +942,7 @@ static uint8_t *WriteQuestionToPacket(uint8_t *pch, uint8_t *pchEnd, const DnsQu
 //
 // parse a sequence of bytes into a structured DNS message
 //
-static std::tuple<bool, DnsMessage> Parse(const uint8_t *buf, size_t bufSize) {
+static std::optional<DnsMessage> Parse(const uint8_t *buf, size_t bufSize) {
 	static_assert(sizeof(DnsMessage::dnsHead) == 4);
 	//
 	// +0x00 Xid
@@ -953,7 +954,7 @@ static std::tuple<bool, DnsMessage> Parse(const uint8_t *buf, size_t bufSize) {
 	// +0x0A Additional record count
 	//
 	if (bufSize < 0x0c) {
-		return { false, {} };
+		return std::nullopt;
 	}
 	auto headerVars = (const DnsHeaderVars *)buf;
 
@@ -971,7 +972,7 @@ static std::tuple<bool, DnsMessage> Parse(const uint8_t *buf, size_t bufSize) {
 	for (auto idx = 0; idx < questionCount; idx++) {
 		auto [qsize, question] = extractor.ExtractQuestion(offset);
 		if (!qsize) {
-			return {};
+			return std::nullopt;
 		}
 		result.questions.emplace_back(std::move(question));
 		offset += qsize;
@@ -981,7 +982,7 @@ static std::tuple<bool, DnsMessage> Parse(const uint8_t *buf, size_t bufSize) {
 		for (auto idx = 0; idx < anwserCount; idx++) {
 			auto [rsize, record] = extractor.ExtractAnwser(offset);
 			if (!rsize) {
-				return {};
+				return std::nullopt;
 			}
 			offset += rsize;
 			result.answers.emplace_back(std::move(record));
@@ -990,7 +991,7 @@ static std::tuple<bool, DnsMessage> Parse(const uint8_t *buf, size_t bufSize) {
 		for (auto idx = 0; idx < authoriyCount; idx++) {
 			auto [rsize, record] = extractor.ExtractAnwser(offset);
 			if (!rsize) {
-				return {};
+				return std::nullopt;
 			}
 			offset += rsize;
 			result.authorityAnwsers.emplace_back(std::move(record));
@@ -999,7 +1000,7 @@ static std::tuple<bool, DnsMessage> Parse(const uint8_t *buf, size_t bufSize) {
 		for (auto idx = 0; idx < additonalCount; idx++) {
 			auto [rsize, record] = extractor.ExtractAnwser(offset);
 			if (!rsize) {
-				return {};
+				return std::nullopt;
 			}
 			offset += rsize;
 			result.additionalAnwsers.emplace_back(std::move(record));
@@ -1011,7 +1012,7 @@ static std::tuple<bool, DnsMessage> Parse(const uint8_t *buf, size_t bufSize) {
 	result.dnsHead.xid = ntohs(headerVars->xid);
 
 	// done
-	return { true, std::move(result) };
+	return std::move(result);
 }
 
 //
