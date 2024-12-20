@@ -8,13 +8,18 @@
 constexpr quint16 DNS_PORT = 53;
 constexpr auto MAX_UDP_DNS_PACKET_SIZE = 512;
 constexpr auto DNS_SERVER_IP = "8.8.8.8";
-constexpr auto LOOKUP_DOMAIN = "www.google.com";
+constexpr auto LOOKUP_DOMAIN = "aliyun.com";
 
-inline QByteArray vectorToQByteArray(const std::vector<std::byte> &data)
+constexpr dns::RecordType recordType = dns::RecordType::AAAA;
+constexpr dns::RecordClass recordClass = dns::RecordClass::INTERNET;
+
+template <typename T,
+          typename = std::enable_if_t<std::is_same_v<typename T::value_type, std::byte>>>
+inline QByteArray vectorToQByteArray(const T &data)
 {
     return QByteArray(
         reinterpret_cast<const char *>(data.data()),
-        static_cast<qsizetype>(data.size()));
+        static_cast<qsizetype>(data.size() * sizeof(std::byte)));
 }
 
 inline std::vector<std::byte> QByteArrayToVector(const QByteArray &data)
@@ -22,6 +27,18 @@ inline std::vector<std::byte> QByteArrayToVector(const QByteArray &data)
     return std::vector<std::byte>(
         reinterpret_cast<const std::byte *>(data.data()),
         reinterpret_cast<const std::byte *>(data.data() + data.size()));
+}
+
+// ipv6 ( std::array<std::byte, 16> ) to QHostAddress
+inline QHostAddress vectorToQHostAddress(const std::array<std::byte, 16> &data)
+{
+    // to Q_IPV6ADDR
+    Q_IPV6ADDR ipv6;
+    for (int i = 0; i < 16; ++i)
+    {
+        ipv6[i] = static_cast<quint8>(data[i]);
+    }
+    return QHostAddress(ipv6);
 }
 
 int main(int argc, char *argv[])
@@ -45,8 +62,8 @@ int main(int argc, char *argv[])
 
     dns::DnsQuestion question;
     question.name = LOOKUP_DOMAIN;
-    question.type = dns::RecordType::A;
-    question.cls = dns::RecordClass::INTERNET;
+    question.type = recordType;
+    question.cls = recordClass;
 
     dns::DnsMessage message;
     message.dnsHead = headerVars;
@@ -92,16 +109,47 @@ int main(int argc, char *argv[])
                 }
                 qDebug() << "Parsed DNS response";
 
+                std::vector<dns::DnsAnswer> answers;
+
+                answers = response->answers;
+                answers.insert(answers.end(), response->authorityAnswers.begin(), response->authorityAnswers.end());
+                answers.insert(answers.end(), response->additionalAnswers.begin(), response->additionalAnswers.end());
+
                 // print answers
-                for (const auto &answer : response->answers)
+                for (const auto &answer : answers)
                 {
                     qDebug() << "Answer:" << QString::fromStdString(answer.name) << answer.ttl;
                     if (auto a = std::get_if<dns::AData>(&answer.value))
                     {
                         qDebug() << "A:" << QHostAddress{ *a };
                     }
+                    else if (auto aaaa = std::get_if<dns::AAAAData>(&answer.value))
+                    {
+                        qDebug() << "AAAA:" << vectorToQHostAddress(*aaaa);
+                    }
+                    else if (auto mx = std::get_if<dns::MXData>(&answer.value))
+                    {
+                        qDebug() << "MX:" << mx->exchange;
+                    }
+                    else if (auto ptr = std::get_if<dns::PTRData>(&answer.value))
+                    {
+                        qDebug() << "PTR:" << QString::fromStdString(*ptr);
+                    }
+                    else if (auto txt = std::get_if<dns::TXTData>(&answer.value))
+                    {
+                        qDebug() << "TXT:" << txt->txt;
+                    }
+                    else if (auto soa = std::get_if<dns::SOAData>(&answer.value))
+                    {
+                        qDebug() << "SOA:" << soa->primaryServer << soa->administrator << soa->serialNo << soa->refresh << soa->retry << soa->expire << soa->defaultTtl;
+                    }
+                    else
+                    {
+                        qDebug() << "Unknown record type";
+                    }
                 }
-            } }
+            }
+        }
     };
     QObject::connect(&udpSocket, &QUdpSocket::readyRead, slotsFunction);
     udpSocket.connectToHost(DNS_SERVER_IP, DNS_PORT);
