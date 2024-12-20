@@ -188,8 +188,8 @@ struct DnsMessage
     DnsHeaderVars dnsHead = { 0 };
     std::vector<DnsQuestion> questions;
     std::vector<DnsAnswer> answers;
-    std::vector<DnsAnswer> authorityAnwsers;
-    std::vector<DnsAnswer> additionalAnwsers;
+    std::vector<DnsAnswer> authorityAnswers;
+    std::vector<DnsAnswer> additionalAnswers;
 };
 
 namespace impl
@@ -1146,7 +1146,7 @@ static std::optional<DnsMessage> Parse(const uint8_t *buf, size_t bufSize)
                 return std::nullopt;
             }
             offset += rsize;
-            result.authorityAnwsers.emplace_back(std::move(record));
+            result.authorityAnswers.emplace_back(std::move(record));
         }
 
         for (auto idx = 0; idx < additonalCount; idx++)
@@ -1157,7 +1157,7 @@ static std::optional<DnsMessage> Parse(const uint8_t *buf, size_t bufSize)
                 return std::nullopt;
             }
             offset += rsize;
-            result.additionalAnwsers.emplace_back(std::move(record));
+            result.additionalAnswers.emplace_back(std::move(record));
         }
     }
 
@@ -1220,8 +1220,8 @@ static std::vector<std::byte> Build(const DnsMessage &message)
     pch += 2;
     CHECK_WRITE((uint16_t)message.questions.size());
     CHECK_WRITE((uint16_t)message.answers.size());
-    CHECK_WRITE((uint16_t)message.authorityAnwsers.size());
-    CHECK_WRITE((uint16_t)message.additionalAnwsers.size());
+    CHECK_WRITE((uint16_t)message.authorityAnswers.size());
+    CHECK_WRITE((uint16_t)message.additionalAnswers.size());
 
     impl::DnsNameCompressionContext compressCtx(pchBegin, pchEnd);
     auto bodyPtr = pch;
@@ -1240,13 +1240,13 @@ static std::vector<std::byte> Build(const DnsMessage &message)
         if (!pch)
             return {};
     }
-    for (const auto &authority : message.authorityAnwsers)
+    for (const auto &authority : message.authorityAnswers)
     {
         pch = impl::WriteRecordToPacket(pch, pchEnd, authority, &compressCtx);
         if (!pch)
             return {};
     }
-    for (const auto &additional : message.additionalAnwsers)
+    for (const auto &additional : message.additionalAnswers)
     {
         pch = impl::WriteRecordToPacket(pch, pchEnd, additional, &compressCtx);
         if (!pch)
