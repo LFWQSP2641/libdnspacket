@@ -8,9 +8,9 @@
 constexpr quint16 DNS_PORT = 53;
 constexpr auto MAX_UDP_DNS_PACKET_SIZE = 512;
 constexpr auto DNS_SERVER_IP = "8.8.8.8";
-constexpr auto LOOKUP_DOMAIN = "aliyun.com";
+constexpr auto LOOKUP_DOMAIN = "dns.alidns.com";
 
-constexpr dns::RecordType recordType = dns::RecordType::AAAA;
+constexpr dns::RecordType recordType = dns::RecordType::A;
 constexpr dns::RecordClass recordClass = dns::RecordClass::INTERNET;
 
 template <typename T,
@@ -80,77 +80,81 @@ int main(int argc, char *argv[])
     qDebug() << "Sending DNS packet" << packetData.toHex();
 
     QUdpSocket udpSocket;
-    auto slotsFunction{
+    auto slotsFunction {
         [&udpSocket]()
+    {
+        while (udpSocket.hasPendingDatagrams())
         {
-            while (udpSocket.hasPendingDatagrams())
+            QByteArray data;
+            data.resize(udpSocket.pendingDatagramSize());
+            QHostAddress sender;
+            quint16 senderPort;
+            udpSocket.readDatagram(data.data(), data.size(), &sender, &senderPort);
+            qDebug() << QStringLiteral("Received data from ").append(sender.toString()).append(QStringLiteral(":")).append(QString::number(senderPort));
+            qDebug() << data.toHex();
+
+            // QByteArray to std::vector<std::byte>
+            std::vector<std::byte> responseData(QByteArrayToVector(data));
+
+            // to const uint8_t * and size
+            const auto *responsePtr = reinterpret_cast<const uint8_t *>(responseData.data());
+            const auto responseSize = responseData.size();
+
+            // parse DNS response
+            auto response = dns::Parse(responsePtr, responseSize);
+            if (!response)
             {
-                QByteArray data;
-                data.resize(udpSocket.pendingDatagramSize());
-                QHostAddress sender;
-                quint16 senderPort;
-                udpSocket.readDatagram(data.data(), data.size(), &sender, &senderPort);
-                qDebug() << QStringLiteral("Received data from ").append(sender.toString()).append(QStringLiteral(":")).append(QString::number(senderPort));
-                qDebug() << data.toHex();
+                qWarning() << "Failed to parse DNS response";
+                return;
+            }
+            qDebug() << "Parsed DNS response";
 
-                // QByteArray to std::vector<std::byte>
-                std::vector<std::byte> responseData(QByteArrayToVector(data));
+            std::vector<dns::DnsAnswer> answers;
 
-                // to const uint8_t * and size
-                const auto *responsePtr = reinterpret_cast<const uint8_t *>(responseData.data());
-                const auto responseSize = responseData.size();
+            answers = response->answers;
+            answers.insert(answers.end(), response->authorityAnswers.begin(), response->authorityAnswers.end());
+            answers.insert(answers.end(), response->additionalAnswers.begin(), response->additionalAnswers.end());
 
-                // parse DNS response
-                auto response = dns::Parse(responsePtr, responseSize);
-                if (!response)
+            // print answers
+            for (const auto &answer : answers)
+            {
+                qDebug() << "Answer:" << QString::fromStdString(answer.name) << answer.ttl;
+                if (auto a = std::get_if<dns::AData>(&answer.value))
                 {
-                    qWarning() << "Failed to parse DNS response";
-                    return;
+                    qDebug() << "A:" << QHostAddress {*a};
                 }
-                qDebug() << "Parsed DNS response";
-
-                std::vector<dns::DnsAnswer> answers;
-
-                answers = response->answers;
-                answers.insert(answers.end(), response->authorityAnswers.begin(), response->authorityAnswers.end());
-                answers.insert(answers.end(), response->additionalAnswers.begin(), response->additionalAnswers.end());
-
-                // print answers
-                for (const auto &answer : answers)
+                else if (auto aaaa = std::get_if<dns::AAAAData>(&answer.value))
                 {
-                    qDebug() << "Answer:" << QString::fromStdString(answer.name) << answer.ttl;
-                    if (auto a = std::get_if<dns::AData>(&answer.value))
-                    {
-                        qDebug() << "A:" << QHostAddress{ *a };
-                    }
-                    else if (auto aaaa = std::get_if<dns::AAAAData>(&answer.value))
-                    {
-                        qDebug() << "AAAA:" << vectorToQHostAddress(*aaaa);
-                    }
-                    else if (auto mx = std::get_if<dns::MXData>(&answer.value))
-                    {
-                        qDebug() << "MX:" << mx->exchange;
-                    }
-                    else if (auto ptr = std::get_if<dns::PTRData>(&answer.value))
-                    {
-                        qDebug() << "PTR:" << QString::fromStdString(*ptr);
-                    }
-                    else if (auto txt = std::get_if<dns::TXTData>(&answer.value))
-                    {
-                        qDebug() << "TXT:" << txt->txt;
-                    }
-                    else if (auto soa = std::get_if<dns::SOAData>(&answer.value))
-                    {
-                        qDebug() << "SOA:" << soa->primaryServer << soa->administrator << soa->serialNo << soa->refresh << soa->retry << soa->expire << soa->defaultTtl;
-                    }
-                    else
-                    {
-                        qDebug() << "Unknown record type";
-                    }
+                    qDebug() << "AAAA:" << vectorToQHostAddress(*aaaa);
+                }
+                else if (auto mx = std::get_if<dns::MXData>(&answer.value))
+                {
+                    qDebug() << "MX:" << mx->exchange;
+                }
+                else if (auto ptr = std::get_if<dns::PTRData>(&answer.value))
+                {
+                    qDebug() << "PTR:" << QString::fromStdString(*ptr);
+                }
+                else if (auto txt = std::get_if<dns::TXTData>(&answer.value))
+                {
+                    qDebug() << "TXT:" << txt->txt;
+                }
+                else if (auto soa = std::get_if<dns::SOAData>(&answer.value))
+                {
+                    qDebug() << "SOA:" << soa->primaryServer << soa->administrator << soa->serialNo << soa->refresh << soa->retry << soa->expire << soa->defaultTtl;
+                }
+                else
+                {
+                    qDebug() << "Unknown record type";
                 }
             }
+
+            if (answers.empty())
+            {
+                qWarning() << "No answers found";
+            }
         }
-    };
+    }};
     QObject::connect(&udpSocket, &QUdpSocket::readyRead, slotsFunction);
     udpSocket.connectToHost(DNS_SERVER_IP, DNS_PORT);
     if (!udpSocket.waitForConnected())

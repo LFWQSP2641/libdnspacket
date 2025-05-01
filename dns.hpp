@@ -681,7 +681,7 @@ private:
             {
                 break;
             }
-            return *(AData *)dataPtr;
+            return ntohl(*(AData *)dataPtr);  // Add ntohl conversion to ensure the IP address is returned in host byte order
         }
         break;
         case RecordType::AAAA:
